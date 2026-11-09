@@ -13,7 +13,7 @@ from .errors import DataUnavailableError
 
 DISCLAIMER = (
     "Educational analysis of historical data only — not financial advice. "
-    "Past performance does not predict future results."
+    "Past performance does not predict future results. Use at your own risk."
 )
 
 

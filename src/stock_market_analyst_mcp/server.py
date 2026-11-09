@@ -22,6 +22,7 @@ from . import indicators as ind
 from .analysis import DISCLAIMER, analyze, compare, quote_summary, to_jsonable
 from .backtest import run_backtest
 from .errors import AnalystError
+from .forecast import monte_carlo_forecast
 from .providers import MarketDataProvider, default_provider
 from .validation import (
     normalize_ticker,
@@ -37,9 +38,11 @@ R = TypeVar("R")
 INSTRUCTIONS = """\
 Stock Market Analyst: tools to fetch market data (Yahoo Finance) and run technical analysis.
 Start with `analyze_stock` for a one-shot overview of a ticker, `compare_tickers` to rank
-several symbols, and `backtest_strategy` to test a rule on history. Tickers use Yahoo Finance
-symbols (AAPL, BRK-B, SHOP.TO, ^GSPC, BTC-USD). Results describe the past only; always
-present them as educational analysis, not financial advice."""
+several symbols, `backtest_strategy` to test a rule on history, and `forecast_price_range` for
+a probabilistic range of future prices. Tickers use Yahoo Finance symbols (AAPL, BRK-B,
+SHOP.TO, ^GSPC, BTC-USD). Always present results as educational analysis, not financial
+advice. Forecast probabilities come from simulations that assume the future resembles the
+past: never present them as predictions or reliable odds, and always relay their disclaimer."""
 
 Ticker = Annotated[str, Field(description="Yahoo Finance symbol, e.g. 'AAPL', 'SHOP.TO', '^GSPC'")]
 Period = Annotated[
@@ -270,6 +273,50 @@ def create_server(provider: MarketDataProvider | None = None) -> MCPServer:
         )
         return to_jsonable({"ticker": symbol, **result})
 
+    @mcp.tool(annotations=READ_ONLY)
+    @_user_errors
+    def forecast_price_range(
+        ticker: Ticker,
+        horizon_days: Annotated[
+            int, Field(description="Trading sessions ahead to simulate (1-252; 21 ≈ 1 month)")
+        ] = 21,
+        target_price: Annotated[
+            float | None,
+            Field(description="Optional price level: probability of ending above / touching it"),
+        ] = None,
+        method: Annotated[
+            Literal["bootstrap", "gbm"],
+            Field(
+                description="bootstrap: resample the stock's own daily returns (fat tails). "
+                "gbm: geometric Brownian motion with historical drift and volatility."
+            ),
+        ] = "bootstrap",
+        lookback: Annotated[
+            Literal["1y", "2y", "5y", "10y"], Field(description="History to learn from")
+        ] = "2y",
+        simulations: Annotated[int, Field(description="Number of simulated paths")] = 10_000,
+        seed: Annotated[
+            int | None, Field(description="Random seed, for reproducible results")
+        ] = None,
+    ) -> dict[str, Any]:
+        """Probabilistic price range by Monte Carlo simulation: percentile range (p5-p95) of the
+        price after `horizon_days`, probability of ending up/down, of hitting a target, of a
+        10% drawdown along the way, plus how often the stock actually rose over that horizon
+        historically. NOT a prediction: it assumes the future resembles the sampled past."""
+        symbol = normalize_ticker(ticker)
+        validate_int("horizon_days", horizon_days, minimum=1, maximum=252)
+        validate_int("simulations", simulations, minimum=1_000, maximum=20_000)
+        history = data.get_history(symbol, validate_period(lookback), "1d")
+        result = monte_carlo_forecast(
+            history["Close"],
+            horizon_days,
+            simulations=simulations,
+            method=method,
+            target_price=target_price,
+            seed=seed,
+        )
+        return to_jsonable({"ticker": symbol, **result})
+
     @mcp.prompt(title="Analyse a stock")
     def analyze_ticker(ticker: str) -> str:
         """Full technical review of one ticker, written for a non-expert."""
@@ -299,6 +346,17 @@ def create_server(provider: MarketDataProvider | None = None) -> MCPServer:
             f"{ticker} over 5 years with `backtest_strategy`. Compare each with buy-and-hold on "
             "return, drawdown and Sharpe ratio, explain why they won or lost, and mention the "
             "limits of backtesting (overfitting, costs, regime changes)."
+        )
+
+    @mcp.prompt(title="Probabilistic outlook")
+    def probability_outlook(ticker: str, horizon_days: str = "21") -> str:
+        """Range of plausible prices for a ticker, with probabilities and their limits."""
+        return (
+            f"Use `forecast_price_range` on {ticker} with horizon_days={horizon_days}, once with "
+            "method 'bootstrap' and once with 'gbm'. Explain the p5-p95 price range, the "
+            "probability of ending higher, of a 10% drawdown along the way, and compare with the "
+            "historical base rate. Be explicit that this is a simulation assuming the future "
+            "resembles the past, not a prediction, and quote the disclaimer."
         )
 
     return mcp
