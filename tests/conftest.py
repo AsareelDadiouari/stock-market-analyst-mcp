@@ -63,6 +63,48 @@ class FakeProvider:
         self.calls.append(("info", ticker))
         return {"name": f"{ticker} Corp.", "currency": "USD", "exchange": "NMS"}
 
+    def get_profile(self, ticker: str) -> dict[str, Any]:
+        self.calls.append(("profile", ticker))
+        if ticker in self.missing:
+            raise DataUnavailableError(f"No company profile found for '{ticker}'.")
+        return {
+            "name": f"{ticker} Corporation",
+            "business_summary": f"{ticker} builds rockets and satellites.",
+            "sector": "Industrials",
+            "current_price": 50.0,
+            "target_mean": 60.0,
+            "analyst_recommendation": "buy",
+            "next_earnings": {"date": "2026-11-10", "eps_estimate": -0.02},
+        }
+
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict[str, Any]]:
+        self.calls.append(("news", ticker, limit))
+        items = [
+            {
+                "title": f"{ticker} headline {i}",
+                "summary": "Something happened.",
+                "publisher": "Newswire",
+                "published_at": f"2026-11-0{i + 1}T12:00:00Z",
+                "url": f"https://example.com/{ticker}/{i}",
+            }
+            for i in range(3)
+        ]
+        return items[:limit]
+
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        self.calls.append(("search", query, limit))
+        catalog = [
+            {
+                "symbol": "RKLB",
+                "name": "Rocket Lab Corporation",
+                "type": "EQUITY",
+                "exchange": "NASDAQ",
+            },
+            {"symbol": "AAPL", "name": "Apple Inc.", "type": "EQUITY", "exchange": "NASDAQ"},
+        ]
+        q = query.lower()
+        return [c for c in catalog if q in c["name"].lower() or q in c["symbol"].lower()][:limit]
+
 
 @pytest.fixture
 def provider() -> FakeProvider:
