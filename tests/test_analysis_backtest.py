@@ -118,3 +118,16 @@ def test_clean_history_normalises_index():
     assert (cleaned.index == cleaned.index.normalize()).all()
     with pytest.raises(DataUnavailableError):
         clean_history(pd.DataFrame(), "X")
+
+
+def test_cached_provider_caches_news_and_copies_lists():
+    inner = FakeProvider()
+    cached = CachedProvider(inner, ttl_seconds=60)
+    first = cached.get_news("RKLB", 3)
+    first[0]["title"] = "tampered"
+    first.clear()
+    second = cached.get_news("RKLB", 3)
+    assert len(second) == 3 and second[0]["title"] == "RKLB headline 0"
+    cached.search("Rocket", 5)
+    cached.search("rocket", 5)  # case-insensitive key
+    assert len([c for c in inner.calls if c[0] in ("news", "search")]) == 2

@@ -37,7 +37,9 @@ R = TypeVar("R")
 
 INSTRUCTIONS = """\
 Stock Market Analyst: tools to fetch market data (Yahoo Finance) and run technical analysis.
-Start with `analyze_stock` for a one-shot overview of a ticker, `compare_tickers` to rank
+If the user names a company, resolve its symbol with `search_ticker`. For a full report combine
+`get_company_profile` (what the company does, fundamentals, analysts), `get_news` (recent
+headlines) and `analyze_stock` (technical overview). Use `compare_tickers` to rank
 several symbols, `backtest_strategy` to test a rule on history, and `forecast_price_range` for
 a probabilistic range of future prices. Tickers use Yahoo Finance symbols (AAPL, BRK-B,
 SHOP.TO, ^GSPC, BTC-USD). Always present results as educational analysis, not financial
@@ -76,6 +78,58 @@ def create_server(provider: MarketDataProvider | None = None) -> MCPServer:
         version=__version__,
         instructions=INSTRUCTIONS,
     )
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_user_errors
+    def search_ticker(
+        query: Annotated[
+            str, Field(description="Company name or partial symbol, e.g. 'rocket lab'")
+        ],
+        limit: Annotated[int, Field(description="Maximum matches (1-10)")] = 5,
+    ) -> dict[str, Any]:
+        """Find the Yahoo Finance symbol of a company from its name. Use it whenever the user
+        names a company instead of giving a ticker (e.g. 'Rocket Lab' -> RKLB)."""
+        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 100:
+            raise AnalystError("query must be 1 to 100 characters, e.g. 'rocket lab'.")
+        validate_int("limit", limit, minimum=1, maximum=10)
+        matches = data.search(query.strip(), limit)
+        if not matches:
+            raise AnalystError(f"No symbol found for '{query}'. Try another spelling.")
+        return to_jsonable({"query": query, "matches": matches})
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_user_errors
+    def get_company_profile(ticker: Ticker) -> dict[str, Any]:
+        """What the company does and how it is doing: business description, sector, country,
+        employees, website, valuation (market cap, P/E, P/S), financials (revenue, growth,
+        margins, cash, debt, free cash flow), analyst consensus and price targets, ownership,
+        short interest and next earnings date with estimates. Data from Yahoo Finance."""
+        symbol = normalize_ticker(ticker)
+        profile = data.get_profile(symbol)
+        price, target = profile.get("current_price"), profile.get("target_mean")
+        if price and target:
+            profile["analyst_target_upside"] = target / price - 1
+        return to_jsonable({"ticker": symbol, **profile, "disclaimer": DISCLAIMER})
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_user_errors
+    def get_news(
+        ticker: Ticker,
+        limit: Annotated[int, Field(description="Number of articles (1-20)")] = 10,
+    ) -> dict[str, Any]:
+        """Recent news headlines about a ticker (title, summary, publisher, date, link), newest
+        first. Use them to explain recent price moves; cite publisher and date."""
+        symbol = normalize_ticker(ticker)
+        validate_int("limit", limit, minimum=1, maximum=20)
+        articles = data.get_news(symbol, limit)
+        return to_jsonable(
+            {
+                "ticker": symbol,
+                "count": len(articles),
+                "articles": articles,
+                "note": "Third-party headlines; content is not verified by this server.",
+            }
+        )
 
     @mcp.tool(annotations=READ_ONLY)
     @_user_errors
@@ -321,10 +375,13 @@ def create_server(provider: MarketDataProvider | None = None) -> MCPServer:
     def analyze_ticker(ticker: str) -> str:
         """Full technical review of one ticker, written for a non-expert."""
         return (
-            f"Analyse {ticker} for me. Call `get_quote` and `analyze_stock`, then explain in plain "
-            "language: the current trend, momentum, volatility and risk, and the key price "
-            "levels to watch. Finish with a short bullish vs bearish summary and remind me "
-            "this is educational analysis of past data, not financial advice."
+            f"Analyse {ticker} for me. If it is a company name rather than a symbol, find the "
+            "symbol with `search_ticker` first. Call `get_company_profile`, `get_news` and "
+            "`analyze_stock`, then write a report in plain language: what the company does, its "
+            "size, growth and profitability, what analysts expect, the recent news that matters, "
+            "the current trend, momentum, volatility and key price levels to watch. Finish with "
+            "a short bullish vs bearish summary, cite news sources with their dates, and remind "
+            "me this is educational analysis, not financial advice."
         )
 
     @mcp.prompt(title="Compare stocks")

@@ -6,8 +6,8 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A **[Model Context Protocol](https://modelcontextprotocol.io) server** that turns Claude (or any
-MCP client) into a stock market analyst. It fetches market data, computes technical indicators,
-compares tickers, backtests trading rules and simulates probabilistic price ranges — then hands
+MCP client) into a stock market analyst. It researches companies (profile, fundamentals, analyst
+consensus, recent news), fetches market data, computes technical indicators, compares tickers, backtests trading rules and simulates probabilistic price ranges — then hands
 structured results to the model, which explains them in plain language.
 
 > [!CAUTION]
@@ -39,12 +39,32 @@ Claude  ▸ get_quote(ticker="MSFT")
         This is an educational reading of past data, not financial advice.
 ```
 
-Numbers above come from a real run of `analyze_stock` (November 2026).
+Company research works from a plain name:
+
+```text
+You     What does Rocket Lab do, and what's the latest news?
+
+Claude  ▸ search_ticker(query="rocket lab")        → RKLB
+        ▸ get_company_profile(ticker="RKLB")
+        ▸ get_news(ticker="RKLB", limit=5)
+
+        Rocket Lab (RKLB, Nasdaq) provides launch services and space systems; ~2,600
+        employees, $33.9B market cap. Revenue grew 62% year over year to $769M (TTM), but the
+        company is not yet profitable (operating margin −25%). It holds $2.3B of cash against
+        $134M of debt. 20 analysts rate it "buy", mean target $102. Earnings are due today
+        (Nov 9). In the news: progress on the Neutron rocket's first stage (Stocktwits, Nov 9)
+        and renewed investor interest in space stocks (Insider Monkey, Nov 8)…
+```
+
+Numbers above come from real runs (November 2026).
 
 ## Tools
 
 | Tool | What it does |
 | --- | --- |
+| `search_ticker` | Find a symbol from a company name ("rocket lab" → `RKLB`) |
+| `get_company_profile` | What the company does, sector, employees, valuation, revenue & growth, margins, cash & debt, analyst consensus & price targets, ownership, next earnings date |
+| `get_news` | Recent headlines with publisher, date, summary and link |
 | `get_quote` | Latest price, daily change, volume, 52-week range, company details |
 | `get_price_history` | Adjusted OHLCV bars (daily / weekly / monthly) plus a period summary |
 | `technical_indicators` | SMA, EMA, RSI (Wilder), MACD (12/26/9), Bollinger Bands (20, 2σ) with interpretation |
@@ -170,7 +190,7 @@ Design choices:
 
 ```bash
 uv sync                 # install runtime + dev dependencies
-uv run pytest           # 48 tests, fully offline (mocked market data)
+uv run pytest           # 57 tests, fully offline (mocked market data)
 uv run ruff check .     # lint
 uv run ruff format .    # format
 ```
