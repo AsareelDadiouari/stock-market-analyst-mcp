@@ -1,0 +1,46 @@
+[project]
+name = "stock-market-analyst-mcp"
+version = "0.1.0"
+description = "A Model Context Protocol server that lets Claude (or any MCP client) analyse stocks: quotes, price history, technical indicators, comparisons and strategy backtests."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Asaréel Dadiouari" }]
+requires-python = ">=3.11"
+keywords = ["mcp", "model-context-protocol", "claude", "stocks", "technical-analysis", "yfinance"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "mcp>=2.0,<3",
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "yfinance>=0.2.50",
+]
+
+[project.scripts]
+stock-market-analyst-mcp = "stock_market_analyst_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stock_market_analyst_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
