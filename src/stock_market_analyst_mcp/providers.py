@@ -35,6 +35,19 @@ class MarketDataProvider(Protocol):
         """Return descriptive metadata (name, currency, exchange, sector, market cap...)."""
         ...
 
+    def get_profile(self, ticker: str) -> dict[str, Any]:
+        """Return the company profile: business description, fundamentals, analyst consensus,
+        ownership and next earnings date (raw keys as documented in YFinanceProvider)."""
+        ...
+
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Return recent news items: title, summary, publisher, published_at, url."""
+        ...
+
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Find symbols matching a company name or partial symbol."""
+        ...
+
 
 def clean_history(df: pd.DataFrame | None, ticker: str) -> pd.DataFrame:
     """Normalise a raw OHLCV frame: known columns, naive daily DatetimeIndex, sorted."""
@@ -88,6 +101,115 @@ class YFinanceProvider:
             return {}  # metadata is optional; prices remain the source of truth
         return {out: info[key] for key, out in self._INFO_KEYS.items() if info.get(key) is not None}
 
+    _PROFILE_KEYS = {
+        # identity
+        "longName": "name",
+        "longBusinessSummary": "business_summary",
+        "sector": "sector",
+        "industry": "industry",
+        "country": "country",
+        "website": "website",
+        "fullTimeEmployees": "employees",
+        "fullExchangeName": "exchange",
+        "currency": "currency",
+        # valuation
+        "currentPrice": "current_price",
+        "marketCap": "market_cap",
+        "enterpriseValue": "enterprise_value",
+        "trailingPE": "trailing_pe",
+        "forwardPE": "forward_pe",
+        "priceToSalesTrailing12Months": "price_to_sales",
+        "priceToBook": "price_to_book",
+        # financials
+        "totalRevenue": "revenue_ttm",
+        "revenueGrowth": "revenue_growth_yoy",
+        "grossMargins": "gross_margin",
+        "operatingMargins": "operating_margin",
+        "profitMargins": "profit_margin",
+        "freeCashflow": "free_cash_flow",
+        "totalCash": "total_cash",
+        "totalDebt": "total_debt",
+        "debtToEquity": "debt_to_equity",
+        "dividendYield": "dividend_yield",
+        "beta": "beta",
+        # analysts
+        "recommendationKey": "analyst_recommendation",
+        "recommendationMean": "analyst_score_1_buy_5_sell",
+        "numberOfAnalystOpinions": "analyst_count",
+        "targetLowPrice": "target_low",
+        "targetMeanPrice": "target_mean",
+        "targetHighPrice": "target_high",
+        # ownership
+        "heldPercentInsiders": "held_by_insiders",
+        "heldPercentInstitutions": "held_by_institutions",
+        "shortPercentOfFloat": "short_percent_of_float",
+    }
+
+    def get_profile(self, ticker: str) -> dict[str, Any]:
+        import yfinance as yf
+
+        t = yf.Ticker(ticker)
+        try:
+            info = t.info or {}
+        except Exception as exc:
+            raise DataUnavailableError(f"Could not load the profile of '{ticker}': {exc}") from exc
+        if not info or info.get("quoteType") is None:
+            raise DataUnavailableError(
+                f"No company profile found for '{ticker}'. Use `search_ticker` to find the symbol."
+            )
+        profile = {out: info[k] for k, out in self._PROFILE_KEYS.items() if info.get(k) is not None}
+        try:
+            calendar = t.calendar or {}
+        except Exception:
+            calendar = {}
+        if calendar.get("Earnings Date"):
+            profile["next_earnings"] = {
+                "date": str(calendar["Earnings Date"][0]),
+                "eps_estimate": calendar.get("Earnings Average"),
+                "revenue_estimate": calendar.get("Revenue Average"),
+            }
+        return profile
+
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict[str, Any]]:
+        import yfinance as yf
+
+        try:
+            raw = yf.Ticker(ticker).get_news(count=limit) or []
+        except Exception as exc:
+            raise DataUnavailableError(f"Could not load news for '{ticker}': {exc}") from exc
+        items = []
+        for entry in raw:
+            content = entry.get("content", entry)  # newer yfinance nests fields under "content"
+            url = (content.get("canonicalUrl") or content.get("clickThroughUrl") or {}).get("url")
+            items.append(
+                {
+                    "title": content.get("title"),
+                    "summary": content.get("summary") or content.get("description"),
+                    "publisher": (content.get("provider") or {}).get("displayName"),
+                    "published_at": content.get("pubDate"),
+                    "url": url or content.get("link"),
+                }
+            )
+        return [i for i in items if i["title"]][:limit]
+
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        import yfinance as yf
+
+        try:
+            quotes = yf.Search(query, max_results=limit, news_count=0).quotes
+        except Exception as exc:
+            raise DataUnavailableError(f"Symbol search failed: {exc}") from exc
+        return [
+            {
+                "symbol": q.get("symbol"),
+                "name": q.get("longname") or q.get("shortname"),
+                "type": q.get("quoteType"),
+                "exchange": q.get("exchDisp") or q.get("exchange"),
+            }
+            for q in quotes
+            if q.get("symbol")
+        ]
+
 
 class CachedProvider:
     """Thread-safe in-memory TTL cache in front of another provider.
@@ -109,6 +231,8 @@ class CachedProvider:
 
     @staticmethod
     def _copy(value: T) -> T:
+        if isinstance(value, list):
+            return [v.copy() if isinstance(v, dict) else v for v in value]  # type: ignore[return-value]
         return value.copy() if isinstance(value, pd.DataFrame | dict) else value
 
     def _cached(self, key: tuple, loader: Callable[[], T]) -> T:
@@ -134,6 +258,16 @@ class CachedProvider:
 
     def get_info(self, ticker: str) -> dict[str, Any]:
         return self._cached(("info", ticker), lambda: self.inner.get_info(ticker))
+
+    def get_profile(self, ticker: str) -> dict[str, Any]:
+        return self._cached(("profile", ticker), lambda: self.inner.get_profile(ticker))
+
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict[str, Any]]:
+        return self._cached(("news", ticker, limit), lambda: self.inner.get_news(ticker, limit))
+
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        key = ("search", query.lower(), limit)
+        return self._cached(key, lambda: self.inner.search(query, limit))
 
     def clear(self) -> None:
         with self._lock:

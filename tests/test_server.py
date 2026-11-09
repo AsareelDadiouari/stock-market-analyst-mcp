@@ -18,6 +18,10 @@ EXPECTED_TOOLS = {
     "analyze_stock",
     "compare_tickers",
     "backtest_strategy",
+    "forecast_price_range",
+    "search_ticker",
+    "get_company_profile",
+    "get_news",
 }
 
 
@@ -39,7 +43,12 @@ async def test_lists_tools_and_prompts(client):
     assert all(t.description for t in tools.values())
     assert all(t.annotations.read_only_hint for t in tools.values())
     prompts = {p.name for p in (await client.list_prompts()).prompts}
-    assert prompts == {"analyze_ticker", "compare_stocks", "evaluate_strategy"}
+    assert prompts == {
+        "analyze_ticker",
+        "compare_stocks",
+        "evaluate_strategy",
+        "probability_outlook",
+    }
 
 
 async def test_get_quote(client):
@@ -99,6 +108,13 @@ async def test_backtest_strategy(client):
         ("backtest_strategy", {"ticker": "SPY", "fast": 200, "slow": 50}, "shorter than"),
         ("get_price_history", {"ticker": "SPY", "limit": 0}, "'limit'"),
         ("get_price_history", {"ticker": "SPY", "period": "7y"}, "period"),
+        ("forecast_price_range", {"ticker": "SPY", "horizon_days": 0}, "'horizon_days'"),
+        ("search_ticker", {"query": "zzzz unknown"}, "No symbol found"),
+        ("search_ticker", {"query": "  "}, "1 to 100 characters"),
+        ("get_company_profile", {"ticker": "NOPE"}, "No company profile"),
+        ("get_news", {"ticker": "AAPL", "limit": 50}, "'limit'"),
+        ("forecast_price_range", {"ticker": "SPY", "simulations": 10}, "'simulations'"),
+        ("forecast_price_range", {"ticker": "SPY", "target_price": -5}, "positive"),
     ],
 )
 async def test_errors_are_readable(client, tool, arguments, message):
@@ -116,3 +132,48 @@ async def test_technical_indicators_defaults_to_all(client):
     error, data = await call(client, "technical_indicators", ticker="AMD")
     assert not error
     assert set(data["latest"]) == {"sma_50", "ema_20", "rsi_14", "macd", "bollinger"}
+
+
+async def test_forecast_price_range(client):
+    error, data = await call(
+        client, "forecast_price_range", ticker="AAPL", horizon_days=21, target_price=150, seed=1
+    )
+    assert not error
+    pct = data["price_percentiles"]
+    assert pct["p5"] <= pct["p25"] <= pct["p50"] <= pct["p75"] <= pct["p95"]
+    assert 0 <= data["probability_up"] <= 1
+    assert "target" in data
+    assert "not a prediction" in data["disclaimer"]
+    _, again = await call(
+        client, "forecast_price_range", ticker="AAPL", horizon_days=21, target_price=150, seed=1
+    )
+    assert again == data  # seeded runs are reproducible
+
+
+async def test_search_ticker_resolves_company_name(client):
+    error, data = await call(client, "search_ticker", query="rocket lab")
+    assert not error
+    assert data["matches"][0]["symbol"] == "RKLB"
+
+
+async def test_get_company_profile(client):
+    error, data = await call(client, "get_company_profile", ticker="rklb")
+    assert not error
+    assert data["ticker"] == "RKLB"
+    assert "rockets" in data["business_summary"]
+    assert data["analyst_target_upside"] == pytest.approx(0.2)
+    assert data["next_earnings"]["date"] == "2026-11-10"
+
+
+async def test_get_news(client):
+    error, data = await call(client, "get_news", ticker="RKLB", limit=2)
+    assert not error
+    assert data["count"] == 2
+    assert {"title", "summary", "publisher", "published_at", "url"} <= set(data["articles"][0])
+
+
+async def test_analyze_prompt_uses_research_tools(client):
+    result = await client.get_prompt("analyze_ticker", {"ticker": "Rocket Lab"})
+    text = result.messages[0].content.text
+    for tool in ("search_ticker", "get_company_profile", "get_news", "analyze_stock"):
+        assert tool in text
