@@ -4,25 +4,17 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 .mypy_cache/
-.ipynb_checkpoints/
 *.egg-info/
 dist/
 build/
 
-# Data & models (keep large files out of git)
-data/raw/
-data/cache/
-models/*.pkl
-models/*.joblib
+# Local data exports
 *.csv
 *.parquet
 
-# Node / Angular
-node_modules/
-.angular/
-
-# Environment & secrets (API keys for market data)
+# Environment & secrets
 .env
 .env.*
 !.env.example
